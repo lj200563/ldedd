@@ -9,10 +9,9 @@ services:
       - API_KEY=sk-123456
       - PORT=5200
       - FLASK_SECRET_KEY=sk-123456
-      - SQL_DSN=mysql+pymysql://user:password@host:port/database
       
       # SSO 令牌配置
-      - SSO=your_sso_cookie_here
+      - TOK_E=your_sso_cookie_here
       - IS_TEMP_CONVERSATION=true
       
       # 代理配置（可选）
