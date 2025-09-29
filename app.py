@@ -20,8 +20,7 @@ request_handler = RequestHandler(token_manager)
 
 
 def initialization():
-    token_manager.load_from_file()
-    token_manager.load_from_env()
+    token_manager.load_tokens()
     
     if config_manager.get("API.PROXY"):
         logger.info(f"代理已设置: {config_manager.get('API.PROXY')}", "Server")
@@ -88,10 +87,54 @@ def delete_manager_token():
         sso = request.json.get('sso')
         if not sso:
             return jsonify({"error": "SSO token is required"}), 400
-        
+
         # 直接删除传入的完整cookie字符串
         token_manager.delete_token(sso)
         return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/manager/api/log-level', methods=['GET'])
+def get_log_level():
+    """获取当前日志级别"""
+    try:
+        current_level = config_manager.get_log_level()
+        supported_levels = config_manager.get_supported_log_levels()
+        return jsonify({
+            "current_level": current_level,
+            "supported_levels": supported_levels
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/manager/api/log-level', methods=['POST'])
+def set_log_level():
+    """设置日志级别"""
+    try:
+        data = request.json
+        level = data.get('level')
+
+        if not level:
+            return jsonify({"error": "Log level is required"}), 400
+
+        # 设置配置管理器中的日志级别
+        if config_manager.set_log_level(level):
+            # 动态设置logger的级别
+            if logger.set_level(level):
+                return jsonify({
+                    "success": True,
+                    "message": f"日志级别已设置为 {level}",
+                    "level": level
+                })
+            else:
+                return jsonify({"error": "Failed to update logger level"}), 500
+        else:
+            supported_levels = config_manager.get_supported_log_levels()
+            return jsonify({
+                "error": f"Invalid log level. Supported levels: {supported_levels}"
+            }), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -260,3 +303,4 @@ if __name__ == '__main__':
         port=config_manager.get("SERVER.PORT"),
         debug=False
     )
+application = app
