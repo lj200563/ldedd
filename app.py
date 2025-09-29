@@ -9,7 +9,6 @@ from config import config_manager
 from logger import logger
 from token_manager import AuthTokenManager
 from request_handler import RequestHandler
-from database import init_db
 
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app)
@@ -21,10 +20,7 @@ request_handler = RequestHandler(token_manager)
 
 
 def initialization():
-    init_db()
-    token_manager.load_from_db()
-    if token_manager.is_empty():
-        token_manager.load_from_env()
+    token_manager.load_from_env()
     
     if config_manager.get("API.PROXY"):
         logger.info(f"代理已设置: {config_manager.get('API.PROXY')}", "Server")
