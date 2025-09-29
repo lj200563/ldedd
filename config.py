@@ -24,14 +24,15 @@ class ConfigManager:
             "ADMIN": {},
             "SERVER": {
                 "COOKIE": None,
-                "PORT": int(os.environ.get("PORT", 5200))
+                "PORT": int(os.environ.get("PORT", 5200)),
+                "SQL_DSN": os.environ.get("SQL_DSN") or None
             },
             "RETRY": {
                 "RETRYSWITCH": False,
                 "MAX_ATTEMPTS": 2
             },
             "LOGGING": {
-                "LOG_LEVEL": os.environ.get("LOG_LEVEL", "ERROR").upper(),
+                "LOG_LEVEL": os.environ.get("LOG_LEVEL", "INFO").upper(),
                 "SUPPORTED_LEVELS": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
             },
         }
