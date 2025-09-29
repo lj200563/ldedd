@@ -57,6 +57,62 @@ class MessageProcessor:
         return text
 
     @staticmethod
+    def process_tool_response(response_data):
+        """规范化响应内容"""
+        if isinstance(response_data, str):
+            text = response_data
+        elif isinstance(response_data, dict):
+            # 过滤重复的 xai:tool_usage_card
+            if (response_data.get("messageTag") == "tool_usage_card" and
+                "xai:tool_usage_card" in response_data["token"]):
+                return ''
+
+            # 处理web搜索结果
+            if response_data.get("webSearchResults"):
+                web_results = response_data["webSearchResults"].get("results", [])
+                if web_results:
+                    formatted_results = []
+                    for result in web_results:
+                        if result.get("title") and result.get("url"):
+                            title = result["title"].strip()
+                            url = result["url"].strip()
+                            if title and url:
+                                formatted_results.append(f"[{title}]({url})")
+
+                    if formatted_results:
+                        return '\n' + '\n'.join(formatted_results) + '\n'
+                return ''
+
+            # 如果是字典但没有web搜索结果，提取token字段
+            text = response_data.get("token", "")
+            if not text:
+                return ''
+        else:
+            return ''
+
+        # 移除 grok:render 标签及内容
+        text = re.sub(r'<grok:render[^>]*>.*?</grok:render>', '', text, flags=re.DOTALL)
+
+        # 仅保留CDATA参数
+        cdata_pattern = r'!\[CDATA\[(.*?)\]\]'
+        matches = re.findall(cdata_pattern, text, re.DOTALL)
+
+        if matches:
+            # 过滤不含 "query" 的 CDATA
+            filtered_matches = []
+            for match in matches:
+                if '"query"' in match:
+                    filtered_matches.append(match)
+
+            if filtered_matches:
+                return '\n' + '\n'.join(filtered_matches) + '\n'
+
+        if '<xai:tool_usage_card>' in text:
+            return ''
+
+        return text
+
+    @staticmethod
     def process_content(content):
         if isinstance(content, list):
             text_content = ''
@@ -165,7 +221,7 @@ class MessageProcessor:
         if model == "grok-4-fast":
             grok4_fast_request = {
                 **base_request,
-                "modelName": config_manager.get_models()[model],  # 使用实际的模型ID
+                "modelName": config_manager.get_models()[model],
                 "disableSearch": False,
                 "enableImageGeneration": True,
                 "returnImageBytes": False,
