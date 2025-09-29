@@ -11,7 +11,6 @@ services:
       - FLASK_SECRET_KEY=sk-123456
       
       # SSO 令牌配置
-      - SSO=your_sso_cookie_here
       - IS_TEMP_CONVERSATION=true
       
       # 代理配置（可选）
