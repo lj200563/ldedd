@@ -1,156 +1,171 @@
 import os
-import json
 from logger import logger
-
+from database import get_db, Token
 
 class AuthTokenManager:
     def __init__(self):
         self.tokens = []
         self.current_index = 0
         self.last_round_index = -1
-        self.cookies_file = "cookies.json"
-
-    def save_to_file(self):
-        """将tokens保存到cookies.json文件"""
-        try:
-            with open(self.cookies_file, 'w') as f:
-                json.dump(self.tokens, f, indent=4)
-        except Exception as e:
-            logger.error(f"保存令牌到文件失败: {str(e)}", "TokenManager")
 
     def add_token(self, token_str):
         if isinstance(token_str, dict):
             token_str = token_str.get("token", "")
-        
+
         if token_str and token_str not in self.tokens:
-            self.tokens.append(token_str)
-            self.current_index = 0
-            self.last_round_index = -1
-            self.save_to_file()
-            logger.info(f"令牌添加成功: {token_str[:20]}...", "TokenManager")
-            return True
+            db_gen = get_db()
+            db = next(db_gen, None)
+            if db:
+                try:
+                    if not db.query(Token).filter(Token.cookie == token_str).first():
+                        db_token = Token(cookie=token_str)
+                        db.add(db_token)
+                        db.commit()
+                        self.tokens.append(token_str)
+                        self.current_index = 0
+                        self.last_round_index = -1
+                        logger.info(f"令牌添加成功: {token_str[:20]}...", "TokenManager")
+                        return True
+                finally:
+                    next(db_gen, None)
+            else:
+                logger.warning("数据库未连接，令牌仅添加到内存中", "TokenManager")
+                self.tokens.append(token_str)
+                self.current_index = 0
+                self.last_round_index = -1
+                return True
         return False
-    
+
     def add_tokens_batch(self, token_strs):
-        """批量添加tokens，优化性能"""
         if not token_strs:
             return {"success": 0, "failed": 0, "duplicates": 0}
-        
-        # 转换为列表如果是其他类型
+
         if isinstance(token_strs, str):
             token_strs = [token_strs]
-        
-        # 使用set进行快速去重检查
+
         existing_tokens_set = set(self.tokens)
         new_tokens = []
         duplicates = 0
         failed = 0
-        
+
         for token_str in token_strs:
             if isinstance(token_str, dict):
                 token_str = token_str.get("token", "")
-            
+
             if not token_str:
                 failed += 1
                 continue
-                
-            # 如果输入的是完整的cookie字符串，直接使用
+
             if 'sso=' in token_str and 'sso-rw=' in token_str:
                 formatted_token = token_str
             else:
-                # 如果只是cookie值，构造完整的cookie字符串
                 formatted_token = f"sso-rw={token_str};sso={token_str}"
-            
+
             if formatted_token in existing_tokens_set:
                 duplicates += 1
             else:
                 new_tokens.append(formatted_token)
                 existing_tokens_set.add(formatted_token)
-        
-        # 批量添加新tokens
+
         if new_tokens:
-            self.tokens.extend(new_tokens)
-            # 只在最后重置索引一次
-            self.current_index = 0
-            self.last_round_index = -1
-            self.save_to_file()
-            logger.info(f"批量添加令牌完成: 成功 {len(new_tokens)} 个，重复 {duplicates} 个，失败 {failed} 个", "TokenManager")
-        
+            db_gen = get_db()
+            db = next(db_gen, None)
+            if db:
+                try:
+                    added_count = 0
+                    for token in new_tokens:
+                        if not db.query(Token).filter(Token.cookie == token).first():
+                            db_token = Token(cookie=token)
+                            db.add(db_token)
+                            added_count += 1
+                    db.commit()
+                    self.tokens.extend(new_tokens)
+                    self.current_index = 0
+                    self.last_round_index = -1
+                    logger.info(f"批量添加令牌完成: 成功 {added_count} 个，重复 {duplicates} 个，失败 {failed} 个", "TokenManager")
+                finally:
+                    next(db_gen, None)
+            else:
+                logger.warning(f"数据库未连接，{len(new_tokens)} 个令牌仅添加到内存中", "TokenManager")
+                self.tokens.extend(new_tokens)
+                self.current_index = 0
+                self.last_round_index = -1
+
         return {
             "success": len(new_tokens),
             "failed": failed,
             "duplicates": duplicates
         }
-        
+
     def set_token(self, token_str):
         if isinstance(token_str, dict):
             token_str = token_str.get("token", "")
-            
         self.tokens = [token_str]
         self.current_index = 0
         self.last_round_index = -1
-        self.save_to_file()
         logger.info(f"设置单个令牌: {token_str[:20]}...", "TokenManager")
 
     def delete_token(self, token):
-        token_deleted = False
+        db_gen = get_db()
+        db = next(db_gen, None)
         try:
             if isinstance(token, dict):
                 token = token.get("token", "")
-            
-            # 首先尝试直接匹配
+
+            if db:
+                db_token = db.query(Token).filter(Token.cookie == token).first()
+                if db_token:
+                    db.delete(db_token)
+                    db.commit()
+            else:
+                logger.warning("数据库未连接，令牌仅从内存中删除", "TokenManager")
+
             if token in self.tokens:
                 self.tokens.remove(token)
-                token_deleted = True
-            else:
-                # 如果直接匹配失败，尝试通过SSO值匹配完整token
-                for stored_token in self.tokens[:]:  # 创建副本以避免在迭代时修改列表
-                    if "sso=" in stored_token:
-                        sso_value = stored_token.split("sso=")[1].split(";")[0]
-                        if sso_value == token:
-                            self.tokens.remove(stored_token)
-                            token_deleted = True
-                            break  # Exit loop once token is found and removed
-            
-            if token_deleted:
-                # 重置轮询状态以避免索引越界
                 self.current_index = 0
                 self.last_round_index = -1
-                self.save_to_file()
                 logger.info(f"令牌已成功移除: {token[:20]}...", "TokenManager")
                 return True
-            else:
-                logger.warning(f"未找到要删除的令牌: {token[:20]}...", "TokenManager")
-                return False
+
+            for stored_token in self.tokens[:]:
+                if "sso=" in stored_token:
+                    sso_value = stored_token.split("sso=")[1].split(";")[0]
+                    if sso_value == token:
+                        if db:
+                            db_token = db.query(Token).filter(Token.cookie == stored_token).first()
+                            if db_token:
+                                db.delete(db_token)
+                                db.commit()
+                        self.tokens.remove(stored_token)
+                        self.current_index = 0
+                        self.last_round_index = -1
+                        logger.info(f"令牌已成功移除: {stored_token[:20]}...", "TokenManager")
+                        return True
+            
+            logger.warning(f"未找到要删除的令牌: {token[:20]}...", "TokenManager")
+            return False
         except Exception as error:
             logger.error(f"令牌删除失败: {str(error)}", "TokenManager")
             return False
-    
+        finally:
+            if db:
+                next(db_gen, None)
+
     def get_next_token_for_model(self, model_id):
         if not self.tokens:
             return None
-            
-        # 检查是否开始新的一轮轮询
         if self.current_index == 0 and self.last_round_index != -1:
-            # 开始新一轮轮询，重置索引
             self.current_index = 0
         else:
-            # 记录上一轮的最后索引
             if self.current_index == len(self.tokens) - 1:
                 self.last_round_index = self.current_index
-        
-        # 按序号依次轮询
         token = self.tokens[self.current_index]
-        
-        # 移动到下一个索引
         self.current_index = (self.current_index + 1) % len(self.tokens)
-        
         return token
-
 
     def get_all_tokens(self):
         return self.tokens.copy()
-        
+
     def get_token_status_map(self):
         status_map = {}
         for i, token in enumerate(self.tokens):
@@ -158,39 +173,31 @@ class AuthTokenManager:
                 sso = token.split("sso=")[1].split(";")[0]
             else:
                 sso = f"token_{i}"
-                
             status_map[sso] = {
                 "isValid": True,
                 "index": i
             }
         return status_map
-    
-    def load_tokens(self):
-        """从cookies.json文件或环境变量加载tokens"""
-        try:
-            if os.path.exists(self.cookies_file):
-                with open(self.cookies_file, 'r') as f:
-                    content = f.read()
-                    if content:
-                        tokens_from_file = json.loads(content)
-                        if tokens_from_file:
-                            self.add_tokens_batch(tokens_from_file)
-                            logger.info(f"从 {self.cookies_file} 加载了 {len(tokens_from_file)} 个令牌", "TokenManager")
-                            return
-        except Exception as e:
-            logger.error(f"从文件加载令牌失败: {str(e)}", "TokenManager")
 
-        # Fallback to environment variable
+    def load_from_db(self):
+        db_gen = get_db()
+        db = next(db_gen, None)
+        if db:
+            try:
+                db_tokens = db.query(Token).all()
+                self.tokens = [token.cookie for token in db_tokens]
+                logger.info(f"从数据库加载了 {len(self.tokens)} 个令牌", "TokenManager")
+            finally:
+                next(db_gen, None)
+
+    def load_from_env(self):
         sso_array = os.environ.get("SSO", "").split(',')
         if sso_array and sso_array[0]:
-            tokens_to_add = []
             for value in sso_array:
                 if value.strip():
                     token_str = f"sso-rw={value.strip()};sso={value.strip()}"
-                    tokens_to_add.append(token_str)
-            if tokens_to_add:
-                self.add_tokens_batch(tokens_to_add)
-                logger.info(f"从环境变量 SSO 加载了 {len(tokens_to_add)} 个令牌", "TokenManager")
+                    self.add_token(token_str)
+        logger.info(f"从环境变量加载了 {len(self.tokens)} 个令牌", "TokenManager")
 
     def is_empty(self):
         return len(self.tokens) == 0
